@@ -453,9 +453,12 @@ def main(
     namespace: str | None,
     rewrite_reports: bool,
     modal: bool,
+    include_metrics: bool = True,
     instance_image_tag: str = "latest",
     report_dir: str = ".",
+    
 ):
+    print("main function called with include_metrics:", include_metrics)
     """
     Run evaluation harness for the given dataset and predictions.
     """
@@ -489,14 +492,18 @@ def main(
     full_dataset = load_swebench_dataset(dataset_name, split, instance_ids)
 
     if modal:
-        # run instances on Modal
         if not dataset:
             print("No instances to run.")
         else:
             validate_modal_credentials()
-            run_instances_modal(predictions, dataset, full_dataset, run_id, timeout)
+            run_instances_modal(predictions, dataset, full_dataset, run_id, timeout, include_metrics)
         return
-
+    if include_metrics:
+        raise NotImplementedError(
+            "The 'include_metrics' option is not yet implemented for local execution. "
+            "Please use the '--modal' option to run with metrics enabled."
+        )
+    
     # run instances locally
     if platform.system() == "Linux":
         resource.setrlimit(resource.RLIMIT_NOFILE, (open_file_limit, open_file_limit))
@@ -609,9 +616,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--report_dir", type=str, default=".", help="Directory to write reports to"
     )
-
     # Modal execution args
-    parser.add_argument("--modal", type=str2bool, default=False, help="Run on Modal")
+    parser.add_argument(
+        "--modal", type=str2bool, default=False, help="Run on Modal"
+        )
+    parser.add_argument(
+        "--include_metrics", type=str2bool, default=False, help="include code metrics in rpeort.json"
+        )
+   
 
     args = parser.parse_args()
     main(**vars(args))

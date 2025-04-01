@@ -16,6 +16,7 @@ from pathlib import Path
 from swebench.harness.docker_build import setup_logger
 from swebench.harness.reporting import make_run_report
 from swebench.harness.utils import EvaluationError
+from swebench.harness.patch_info import parse_git_patch
 from typing import cast
 
 SANDBOX_ENTRYPOINT = "run_evaluation_modal_entrypoint"
@@ -46,6 +47,7 @@ class TestOutput:
     patch_diff: str
     log_dir: Path
     errored: bool
+    metrics_data: dict | None = None
 
 
 class ModalSandboxRuntime:
@@ -205,6 +207,8 @@ class ModalSandboxRuntime:
                 f"/bin/bash -c 'source ~/.bashrc && {remote_env_script_path}'",
                 "echo 'source /opt/miniconda3/etc/profile.d/conda.sh && conda activate testbed' >> /root/.bashrc",
                 f"/bin/bash {remote_repo_script_path}",
+                "pip install radon",
+                "radon --version"
             )
             .workdir("/testbed/")
         )
@@ -230,6 +234,7 @@ def run_instance_modal(
     pred: dict,
     run_id: str,
     timeout: int | None = None,
+    include_metrics:bool = False,
 ) -> TestOutput:
     """
     Run a single instance with the given prediction.
@@ -257,8 +262,52 @@ def run_instance_modal(
             f"Error creating sandbox: {e}",
             logger,
         ) from e
-
+    
     patch_diff = pred.get("model_patch", "")
+    
+    #Functionality for adding code metric data to the report.json
+    if include_metrics:
+        try:
+            radon_commands = {
+            "cycle_complexity": ("radon cc /testbed -a -s --json --output-file /tmp/radon.json", "/tmp/radon.json"),
+            "maintainability_index": ("radon mi /testbed --json --output-file /tmp/mi.json", "/tmp/mi.json"),
+            "raw_metrics": ("radon raw /testbed --json --output-file /tmp/raw.json", "/tmp/raw.json"),
+            "halstead_metrics": ("radon hal /testbed --json --output-file /tmp/hal.json", "/tmp/hal.json"),
+        }
+            metrics_data = {"code_metrics": {}, "patch_info": {}}
+            
+            for metric, (command, output_file) in radon_commands.items():
+                output, returncode = runner.exec(command)
+                if returncode != 0:
+                    logger.info(f"Radon command failed: {command}")
+                    print(f"Radon command failed: {command}")
+                    raise EvaluationError(
+                        instance_id,
+                        f"Radon command failed: {command}",
+                        logger,
+                    )
+                
+                  # Parse Radon JSON output
+                try:
+                    with runner.sandbox.open(output_file, "r") as f:
+                        metrics_data["code_metrics"][metric] = json.loads(f.read())
+                except FileNotFoundError:
+                    print(f"Radon output file not found: {output_file}")
+                    logger.info(f"Radon output file not found: {output_file}")
+                except json.JSONDecodeError as e:
+                    print(f"Failed to parse Radon output as JSON for {metric}: {e}")
+                    logger.info(f"Failed to parse Radon output as JSON for {metric}: {e}")
+                    metrics_data[metric] = {}
+
+        except:
+            logger.info("Error running Radon evaluation")
+            raise EvaluationError(
+                instance_id,
+                "Error running Radon evaluation",
+                logger,
+            )
+        #get patch info first
+        metrics_data["patch_info"] = parse_git_patch(patch_diff)
 
     try:
         patch_file = "/tmp/patch.diff"
@@ -349,6 +398,7 @@ def run_instance_modal(
             patch_diff=patch_diff,
             log_dir=log_dir,
             errored=False,
+            metrics_data=metrics_data if include_metrics else None,
         )
     except modal.exception.SandboxTimeoutError as e:
         raise EvaluationError(
@@ -392,6 +442,7 @@ def run_instances_modal(
     full_dataset: list,
     run_id: str,
     timeout: int,
+    include_metrics: bool
 ):
     """
     Run all instances for the given predictions on Modal.
@@ -426,6 +477,7 @@ def run_instances_modal(
                             predictions[test_spec.instance_id],
                             run_id,
                             timeout,
+                            include_metrics
                         )
                         for test_spec in run_test_specs
                     ],
@@ -446,6 +498,9 @@ def run_instances_modal(
                     with open(log_dir / "report.json", "w") as f:
                         try:
                             report_json = json.loads(result.report_json_str)
+
+                            if result.metrics_data:
+                                report_json["metrics_data"] = result.metrics_data
                             json.dump(report_json, f, indent=4)
                         except Exception:
                             # This happens if the test fails with any exception
