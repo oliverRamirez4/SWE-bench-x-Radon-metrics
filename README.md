@@ -24,6 +24,36 @@
 
 ---
 
+## Radon metrics
+
+This fork records code metrics during a Modal evaluation and stores them on that instance's `report.json`. The local Docker harness does not collect them. Pass `--modal true --include_metrics true` to `python -m swebench.harness.run_evaluation`. Without `--modal`, `--include_metrics true` raises `NotImplementedError`.
+
+`swebench/harness/modal_eval/run_evaluation_modal.py` installs Radon in the sandbox with `pip install radon`. Before the model patch is applied, it runs Radon on `/testbed` and keeps the JSON:
+
+| Key | Command |
+| --- | --- |
+| `cycle_complexity` | `radon cc /testbed -a -s --json` |
+| `maintainability_index` | `radon mi /testbed --json` |
+| `raw_metrics` | `radon raw /testbed --json` |
+| `halstead_metrics` | `radon hal /testbed --json` |
+
+A failed Radon command or unreadable output stops that instance with `EvaluationError`.
+
+`swebench/harness/patch_info.py` reads the prediction's `model_patch` and adds `patch_info`: files modified and added, functions modified, added, and deleted, lines added, deleted, and modified, hunks modified, and test files modified. A path counts as a test file when its name contains `test`.
+
+Both pieces are written together:
+
+```json
+{
+  "metrics_data": {
+    "code_metrics": {},
+    "patch_info": {}
+  }
+}
+```
+
+`code_metrics` holds the four Radon results. `patch_info` holds the patch summary.
+
 Code and data for the following works:
 * [ICLR 2025] <a href="https://arxiv.org/abs/2410.03859">SWE-bench Multimodal: Do AI Systems Generalize to Visual Software Domains?</a>
 * [ICLR 2024 Oral] <a href="https://arxiv.org/abs/2310.06770">SWE-bench: Can Language Models Resolve Real-World GitHub Issues?</a>
